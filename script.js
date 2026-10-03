@@ -1,6 +1,8 @@
-const BOARD_SIZE = 40;
-const PLAYER_COLORS = ['red', 'blue', 'green', 'yellow'];
+const BOARD_CELLS = 40;
 const PLAYER_NAMES = ['Vermelho', 'Azul', 'Verde', 'Amarelo'];
+const PLAYER_COLORS = ['red', 'blue', 'green', 'yellow'];
+const SAFE_CELLS = [5, 12, 19, 26, 33];
+const START_OFFSETS = [0, 10, 20, 30];
 
 class ParacundeGame {
   constructor() {
@@ -8,14 +10,13 @@ class ParacundeGame {
       id: index,
       name: PLAYER_NAMES[index],
       color,
+      start: START_OFFSETS[index],
       pieces: [0, 0, 0, 0],
-      active: index === 0,
-      finished: false
+      winner: false
     }));
 
     this.currentPlayerIndex = 0;
     this.diceValue = null;
-    this.selectedPiece = null;
     this.log = ['Jogo iniciado. O Vermelho começa.'];
     this.gameOver = false;
     this.winner = null;
@@ -25,127 +26,155 @@ class ParacundeGame {
     return this.players[this.currentPlayerIndex];
   }
 
-  rollDice() {
-    if (this.gameOver || this.diceValue !== null) return;
+  getValidMovesForPlayer(playerIndex) {
+    const player = this.players[playerIndex];
+    const moves = [];
 
-    this.diceValue = Math.floor(Math.random() * 6) + 1;
-    this.log.unshift(`${this.currentPlayer.name} rolou ${this.diceValue}.`);
-    this.selectedPiece = null;
-    this.render();
-  }
+    if (this.diceValue === null) return moves;
 
-  getMovablePieces() {
-    const pieces = [];
-
-    this.currentPlayer.pieces.forEach((position, index) => {
-      if (position === 0 && this.diceValue === 6) {
-        pieces.push(index);
-        return;
-      }
-
-      if (position > 0 && position + this.diceValue <= 45) {
-        pieces.push(index);
+    player.pieces.forEach((progress, pieceIndex) => {
+      const valid = this.isMoveValid(playerIndex, pieceIndex, this.diceValue);
+      if (valid) {
+        moves.push(pieceIndex);
       }
     });
 
-    return pieces;
+    return moves;
+  }
+
+  isMoveValid(playerIndex, pieceIndex, roll) {
+    const player = this.players[playerIndex];
+    const progress = player.pieces[pieceIndex];
+
+    if (progress === 0) {
+      return roll === 6;
+    }
+
+    if (progress >= 40) {
+      return false;
+    }
+
+    return progress + roll <= 40;
+  }
+
+  rollDice() {
+    if (this.gameOver || this.diceValue !== null) return;
+
+    const dice = Math.floor(Math.random() * 6) + 1;
+    this.diceValue = dice;
+    this.log.unshift(`${this.currentPlayer.name} rolou ${dice}.`);
+
+    const validMoves = this.getValidMovesForPlayer(this.currentPlayerIndex);
+    if (validMoves.length === 0) {
+      this.log.unshift(`${this.currentPlayer.name} não tem jogadas válidas e perde a vez.`);
+      this.finishTurn();
+      return;
+    }
+
+    this.render();
   }
 
   movePiece(pieceIndex) {
     if (this.gameOver || this.diceValue === null) return;
 
-    const player = this.currentPlayer;
-    const currentPosition = player.pieces[pieceIndex];
-    let nextPosition;
+    const playerIndex = this.currentPlayerIndex;
+    const player = this.players[playerIndex];
 
-    if (currentPosition === 0 && this.diceValue === 6) {
-      nextPosition = 1 + player.id * 0;
-    } else if (currentPosition > 0) {
-      nextPosition = currentPosition + this.diceValue;
-    } else {
+    if (!this.isMoveValid(playerIndex, pieceIndex, this.diceValue)) {
       return;
     }
 
-    const valid = this.isValidMovement(player.id, pieceIndex, currentPosition, nextPosition);
-    if (!valid) return;
+    const previousProgress = player.pieces[pieceIndex];
+    const nextProgress = previousProgress === 0 ? 1 : previousProgress + this.diceValue;
 
-    player.pieces[pieceIndex] = nextPosition;
-    this.captureIfNeeded(player.id, pieceIndex, nextPosition);
+    player.pieces[pieceIndex] = nextProgress;
 
-    this.log.unshift(`${player.name} moveu a peça ${pieceIndex + 1}.`);
+    const previousCell = this.getCellForProgress(playerIndex, previousProgress);
+    const nextCell = this.getCellForProgress(playerIndex, nextProgress);
 
-    if (nextPosition >= 45) {
-      this.log.unshift(`${player.name} concluiu a peça ${pieceIndex + 1}!`);
+    if (previousCell !== null && nextCell !== null) {
+      this.log.unshift(`${player.name} moveu a peça ${pieceIndex + 1} para a casa ${nextCell + 1}.`);
+    } else {
+      this.log.unshift(`${player.name} colocou a peça ${pieceIndex + 1} em jogo.`);
     }
 
-    const allFinished = this.players.every((p) => p.pieces.every((pos) => pos >= 45));
-    if (allFinished) {
+    this.captureOpponentIfNeeded(playerIndex, nextCell);
+
+    if (nextProgress >= 40) {
+      this.log.unshift(`${player.name} concluiu uma peça!`);
+    }
+
+    const winner = this.checkWinner();
+    if (winner) {
       this.gameOver = true;
-      this.winner = this.currentPlayer;
-      this.log.unshift(`${this.currentPlayer.name} venceu!`);
+      this.winner = winner;
+      this.log.unshift(`${winner.name} venceu o jogo!`);
       this.diceValue = null;
       this.render();
       return;
     }
 
-    if (this.diceValue !== 6) {
-      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
-      this.currentPlayer.active = true;
+    if (this.diceValue === 6) {
+      this.log.unshift(`${player.name} tirou 6 e joga novamente.`);
+      this.diceValue = null;
+      this.render();
+      return;
     }
 
+    this.finishTurn();
+  }
+
+  captureOpponentIfNeeded(playerIndex, targetCell) {
+    if (targetCell === null || SAFE_CELLS.includes(targetCell)) {
+      return;
+    }
+
+    this.players.forEach((otherPlayer, otherIndex) => {
+      if (otherIndex === playerIndex) return;
+
+      otherPlayer.pieces.forEach((progress, pieceIndex) => {
+        if (progress <= 0 || progress >= 40) return;
+
+        const opponentCell = this.getCellForProgress(otherIndex, progress);
+        if (opponentCell === targetCell) {
+          otherPlayer.pieces[pieceIndex] = 0;
+          this.log.unshift(`${this.currentPlayer.name} capturou ${otherPlayer.name}!`);
+        }
+      });
+    });
+  }
+
+  getCellForProgress(playerIndex, progress) {
+    const player = this.players[playerIndex];
+
+    if (progress <= 0) {
+      return null;
+    }
+
+    if (progress >= 40) {
+      return null;
+    }
+
+    return (player.start + progress - 1) % BOARD_CELLS;
+  }
+
+  checkWinner() {
+    for (const player of this.players) {
+      const allFinished = player.pieces.every((piece) => piece >= 40);
+      if (allFinished) {
+        return player;
+      }
+    }
+    return null;
+  }
+
+  finishTurn() {
+    this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
     this.diceValue = null;
-    this.selectedPiece = null;
     this.render();
   }
 
-  isValidMovement(playerId, pieceIndex, currentPosition, nextPosition) {
-    const player = this.players[playerId];
-    if (currentPosition === 0 && this.diceValue !== 6) return false;
-    if (nextPosition > 45) return false;
-
-    if (nextPosition === 45) {
-      return true;
-    }
-
-    return true;
-  }
-
-  captureIfNeeded(playerId, pieceIndex, nextPosition) {
-    if (nextPosition <= 40) {
-      const targetBoardIndex = this.getBoardIndex(playerId, nextPosition);
-
-      this.players.forEach((otherPlayer, otherIndex) => {
-        if (otherIndex === playerId) return;
-
-        otherPlayer.pieces.forEach((otherPosition, otherPieceIndex) => {
-          if (otherPosition <= 0) return;
-          if (otherPosition > 40) return;
-
-          const otherBoardIndex = this.getBoardIndex(otherIndex, otherPosition);
-          if (otherBoardIndex === targetBoardIndex && this.isBoardCellOccupiedByOpponent(playerId, otherIndex)) {
-            otherPlayer.pieces[otherPieceIndex] = 0;
-            this.log.unshift(`${this.currentPlayer.name} capturou ${otherPlayer.name}!`);
-          }
-        });
-      });
-    }
-  }
-
-  isBoardCellOccupiedByOpponent(playerId, otherIndex) {
-    return true;
-  }
-
-  getBoardIndex(playerId, piecePosition) {
-    const startOffset = playerId * 10;
-
-    if (piecePosition <= 0) return -1;
-    if (piecePosition > 40) return -1;
-
-    return (startOffset + piecePosition - 1) % BOARD_SIZE;
-  }
-
   render() {
-    if (typeof window === 'undefined') return;
     const app = document.getElementById('app');
     if (!app) return;
 
@@ -174,11 +203,10 @@ class ParacundeGame {
 
             <div class="card controls">
               <button id="rollBtn" ${this.gameOver || this.diceValue !== null ? 'disabled' : ''}>Rolar dado</button>
-              <button id="nextBtn" class="secondary" ${this.gameOver ? 'disabled' : ''}>Próximo</button>
             </div>
 
             <div class="card">
-              <h2>Histórico</h2>
+              <h2>Mensagens</h2>
               <ul class="log" id="log"></ul>
             </div>
           </aside>
@@ -186,87 +214,52 @@ class ParacundeGame {
       </div>
     `;
 
+    document.getElementById('rollBtn').addEventListener('click', () => this.rollDice());
+
     this.renderBoard();
     this.renderPlayers();
     this.renderLog();
-
-    document.getElementById('rollBtn').addEventListener('click', () => this.rollDice());
-    document.getElementById('nextBtn').addEventListener('click', () => {
-      if (!this.gameOver) {
-        this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
-        this.diceValue = null;
-        this.render();
-      }
-    });
   }
 
   renderBoard() {
     const boardEl = document.getElementById('board');
+    if (!boardEl) return;
+
     boardEl.innerHTML = '';
 
-    for (let i = 0; i < BOARD_SIZE; i++) {
+    for (let cellIndex = 0; cellIndex < BOARD_CELLS; cellIndex++) {
       const cell = document.createElement('div');
       cell.className = 'cell';
-      cell.dataset.index = String(i);
 
-      if (i % 10 === 0) cell.classList.add('home');
-      if ([5, 12, 19, 26, 33].includes(i)) cell.classList.add('safe');
-      if ([9, 19, 29, 39].includes(i)) cell.classList.add('goal');
+      if (SAFE_CELLS.includes(cellIndex)) {
+        cell.classList.add('safe');
+      }
 
-      const pieceGroups = [];
+      const tokens = [];
       this.players.forEach((player, playerIndex) => {
-        player.pieces.forEach((piecePosition, pieceIndex) => {
-          if (piecePosition > 0 && piecePosition <= 40) {
-            const boardIndex = this.getBoardIndex(playerIndex, piecePosition);
-            if (boardIndex === i) {
-              pieceGroups.push({ player, pieceIndex });
-            }
+        player.pieces.forEach((progress, pieceIndex) => {
+          if (progress <= 0 || progress >= 40) return;
+
+          const boardPos = this.getCellForProgress(playerIndex, progress);
+          if (boardPos === cellIndex) {
+            tokens.push({ player, pieceIndex });
           }
         });
       });
 
-      pieceGroups.forEach(({ player, pieceIndex }) => {
+      tokens.forEach(({ player, pieceIndex }) => {
         const token = document.createElement('div');
         token.className = `token ${player.color}`;
-        token.title = `${player.name} — peça ${pieceIndex + 1}`;
+        token.title = `${player.name} — Peça ${pieceIndex + 1}`;
         cell.appendChild(token);
       });
 
-      if (pieceGroups.length > 1) {
+      if (tokens.length > 1) {
         const count = document.createElement('div');
         count.className = 'count';
-        count.textContent = String(pieceGroups.length);
+        count.textContent = String(tokens.length);
         cell.appendChild(count);
       }
-
-      cell.addEventListener('click', () => {
-        if (this.diceValue === null || this.gameOver) return;
-
-        const movable = this.getMovablePieces();
-        if (movable.length === 0) {
-          this.log.unshift('Sem peças válidas para esse valor.');
-          this.render();
-          return;
-        }
-
-        const playerIndex = this.currentPlayerIndex;
-        const clickedCellIndex = Number(cell.dataset.index);
-
-        for (let pieceIndex = 0; pieceIndex < 4; pieceIndex++) {
-          const pos = this.players[playerIndex].pieces[pieceIndex];
-          if (pos <= 0) continue;
-
-          const boardIndex = this.getBoardIndex(playerIndex, pos);
-          if (boardIndex === clickedCellIndex) {
-            this.movePiece(pieceIndex);
-            return;
-          }
-        }
-
-        if (this.players[playerIndex].pieces.every((p) => p === 0)) {
-          this.movePiece(0);
-        }
-      });
 
       boardEl.appendChild(cell);
     }
@@ -274,19 +267,53 @@ class ParacundeGame {
 
   renderPlayers() {
     const playersEl = document.getElementById('players');
+    if (!playersEl) return;
+
     playersEl.innerHTML = '';
 
     this.players.forEach((player, index) => {
       const row = document.createElement('div');
       row.className = `player-row ${index === this.currentPlayerIndex ? 'active' : ''}`;
 
-      row.innerHTML = `
-        <div class="player-meta">
-          <span class="player-dot ${player.color}"></span>
-          <span>${player.name}</span>
-        </div>
-        <div>${player.pieces.filter((p) => p > 0).length}/4</div>
-      `;
+      const meta = document.createElement('div');
+      meta.className = 'player-meta';
+
+      const dot = document.createElement('span');
+      dot.className = `player-dot ${player.color}`;
+
+      const name = document.createElement('span');
+      name.textContent = player.name;
+
+      meta.appendChild(dot);
+      meta.appendChild(name);
+
+      const status = document.createElement('div');
+      status.textContent = `${player.pieces.filter((p) => p >= 40).length}/4 concluídas`;
+
+      row.appendChild(meta);
+      row.appendChild(status);
+
+      const validMoves = this.getValidMovesForPlayer(index);
+      if (this.diceValue !== null && validMoves.length > 0 && !this.gameOver && index === this.currentPlayerIndex) {
+        const moveList = document.createElement('div');
+        moveList.style.marginTop = '8px';
+        moveList.style.display = 'flex';
+        moveList.style.flexWrap = 'wrap';
+        moveList.style.gap = '6px';
+
+        validMoves.forEach((pieceIndex) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = `Mover peça ${pieceIndex + 1}`;
+          btn.style.padding = '8px 10px';
+          btn.style.fontSize = '0.8rem';
+          btn.style.flex = '1 1 48%';
+          btn.addEventListener('click', () => this.movePiece(pieceIndex));
+          moveList.appendChild(btn);
+        });
+
+        row.appendChild(moveList);
+      }
 
       playersEl.appendChild(row);
     });
@@ -294,23 +321,24 @@ class ParacundeGame {
 
   renderLog() {
     const logEl = document.getElementById('log');
-    logEl.innerHTML = '';
+    if (!logEl) return;
 
-    this.log.slice(0, 12).forEach((entry) => {
+    logEl.innerHTML = '';
+    this.log.slice(0, 10).forEach((message) => {
       const item = document.createElement('li');
-      item.textContent = entry;
+      item.textContent = message;
       logEl.appendChild(item);
     });
   }
 }
 
-function initParacundeGame() {
+function initGame() {
   const app = document.getElementById('app');
   if (!app) return;
 
   const game = new ParacundeGame();
-  game.render();
   window.paracundeGame = game;
+  game.render();
 }
 
-document.addEventListener('DOMContentLoaded', initParacundeGame);
+document.addEventListener('DOMContentLoaded', initGame);
