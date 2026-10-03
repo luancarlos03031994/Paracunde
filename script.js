@@ -3,6 +3,7 @@ const PLAYER_NAMES = ['Vermelho', 'Azul', 'Verde', 'Amarelo'];
 const PLAYER_COLORS = ['red', 'blue', 'green', 'yellow'];
 const SAFE_CELLS = [5, 12, 19, 26, 33];
 const START_OFFSETS = [0, 10, 20, 30];
+const FINAL_TARGET = 40;
 
 class ParacundeGame {
   constructor() {
@@ -10,9 +11,8 @@ class ParacundeGame {
       id: index,
       name: PLAYER_NAMES[index],
       color,
-      start: START_OFFSETS[index],
       pieces: [0, 0, 0, 0],
-      winner: false
+      finished: 0
     }));
 
     this.currentPlayerIndex = 0;
@@ -20,10 +20,16 @@ class ParacundeGame {
     this.log = ['Jogo iniciado. O Vermelho começa.'];
     this.gameOver = false;
     this.winner = null;
+    this.gameStarted = true;
   }
 
   get currentPlayer() {
     return this.players[this.currentPlayerIndex];
+  }
+
+  getBoardCellForProgress(playerIndex, progress) {
+    if (progress <= 0 || progress >= FINAL_TARGET) return null;
+    return (START_OFFSETS[playerIndex] + progress - 1) % BOARD_CELLS;
   }
 
   getValidMovesForPlayer(playerIndex) {
@@ -33,8 +39,7 @@ class ParacundeGame {
     if (this.diceValue === null) return moves;
 
     player.pieces.forEach((progress, pieceIndex) => {
-      const valid = this.isMoveValid(playerIndex, pieceIndex, this.diceValue);
-      if (valid) {
+      if (this.isMoveValid(playerIndex, pieceIndex, this.diceValue)) {
         moves.push(pieceIndex);
       }
     });
@@ -44,17 +49,17 @@ class ParacundeGame {
 
   isMoveValid(playerIndex, pieceIndex, roll) {
     const player = this.players[playerIndex];
-    const progress = player.pieces[pieceIndex];
+    const current = player.pieces[pieceIndex];
 
-    if (progress === 0) {
+    if (current === 0) {
       return roll === 6;
     }
 
-    if (progress >= 40) {
+    if (current >= FINAL_TARGET) {
       return false;
     }
 
-    return progress + roll <= 40;
+    return current + roll <= FINAL_TARGET;
   }
 
   rollDice() {
@@ -84,23 +89,20 @@ class ParacundeGame {
       return;
     }
 
-    const previousProgress = player.pieces[pieceIndex];
-    const nextProgress = previousProgress === 0 ? 1 : previousProgress + this.diceValue;
+    const before = player.pieces[pieceIndex];
+    const after = before === 0 ? 1 : before + this.diceValue;
+    player.pieces[pieceIndex] = after;
 
-    player.pieces[pieceIndex] = nextProgress;
-
-    const previousCell = this.getCellForProgress(playerIndex, previousProgress);
-    const nextCell = this.getCellForProgress(playerIndex, nextProgress);
-
-    if (previousCell !== null && nextCell !== null) {
-      this.log.unshift(`${player.name} moveu a peça ${pieceIndex + 1} para a casa ${nextCell + 1}.`);
+    if (before === 0) {
+      this.log.unshift(`${player.name} saiu com a peça ${pieceIndex + 1}.`);
     } else {
-      this.log.unshift(`${player.name} colocou a peça ${pieceIndex + 1} em jogo.`);
+      this.log.unshift(`${player.name} moveu a peça ${pieceIndex + 1} para a casa ${after}.`);
     }
 
-    this.captureOpponentIfNeeded(playerIndex, nextCell);
+    this.captureOpponentIfNeeded(playerIndex, after);
 
-    if (nextProgress >= 40) {
+    if (after >= FINAL_TARGET) {
+      player.finished += 1;
       this.log.unshift(`${player.name} concluiu uma peça!`);
     }
 
@@ -124,44 +126,28 @@ class ParacundeGame {
     this.finishTurn();
   }
 
-  captureOpponentIfNeeded(playerIndex, targetCell) {
-    if (targetCell === null || SAFE_CELLS.includes(targetCell)) {
-      return;
-    }
+  captureOpponentIfNeeded(playerIndex, progress) {
+    if (progress <= 0 || progress >= FINAL_TARGET) return;
+
+    const targetCell = this.getBoardCellForProgress(playerIndex, progress);
+    if (targetCell === null || SAFE_CELLS.includes(targetCell)) return;
 
     this.players.forEach((otherPlayer, otherIndex) => {
       if (otherIndex === playerIndex) return;
-
-      otherPlayer.pieces.forEach((progress, pieceIndex) => {
-        if (progress <= 0 || progress >= 40) return;
-
-        const opponentCell = this.getCellForProgress(otherIndex, progress);
-        if (opponentCell === targetCell) {
-          otherPlayer.pieces[pieceIndex] = 0;
-          this.log.unshift(`${this.currentPlayer.name} capturou ${otherPlayer.name}!`);
+      otherPlayer.pieces.forEach((otherProgress, otherPieceIndex) => {
+        if (otherProgress <= 0 || otherProgress >= FINAL_TARGET) return;
+        const otherCell = this.getBoardCellForProgress(otherIndex, otherProgress);
+        if (otherCell === targetCell) {
+          otherPlayer.pieces[otherPieceIndex] = 0;
+          this.log.unshift(`${this.currentPlayer.name} capturou a peça de ${otherPlayer.name}!`);
         }
       });
     });
   }
 
-  getCellForProgress(playerIndex, progress) {
-    const player = this.players[playerIndex];
-
-    if (progress <= 0) {
-      return null;
-    }
-
-    if (progress >= 40) {
-      return null;
-    }
-
-    return (player.start + progress - 1) % BOARD_CELLS;
-  }
-
   checkWinner() {
     for (const player of this.players) {
-      const allFinished = player.pieces.every((piece) => piece >= 40);
-      if (allFinished) {
+      if (player.pieces.every((progress) => progress >= FINAL_TARGET)) {
         return player;
       }
     }
@@ -215,7 +201,6 @@ class ParacundeGame {
     `;
 
     document.getElementById('rollBtn').addEventListener('click', () => this.rollDice());
-
     this.renderBoard();
     this.renderPlayers();
     this.renderLog();
@@ -230,17 +215,14 @@ class ParacundeGame {
     for (let cellIndex = 0; cellIndex < BOARD_CELLS; cellIndex++) {
       const cell = document.createElement('div');
       cell.className = 'cell';
-
-      if (SAFE_CELLS.includes(cellIndex)) {
-        cell.classList.add('safe');
-      }
+      if (SAFE_CELLS.includes(cellIndex)) cell.classList.add('safe');
+      if (cellIndex % 10 === 0) cell.classList.add('home');
 
       const tokens = [];
       this.players.forEach((player, playerIndex) => {
         player.pieces.forEach((progress, pieceIndex) => {
-          if (progress <= 0 || progress >= 40) return;
-
-          const boardPos = this.getCellForProgress(playerIndex, progress);
+          if (progress <= 0 || progress >= FINAL_TARGET) return;
+          const boardPos = this.getBoardCellForProgress(playerIndex, progress);
           if (boardPos === cellIndex) {
             tokens.push({ player, pieceIndex });
           }
@@ -284,35 +266,28 @@ class ParacundeGame {
       const name = document.createElement('span');
       name.textContent = player.name;
 
+      const status = document.createElement('div');
+      status.textContent = `${player.finished}/4 concluídas`;
+
       meta.appendChild(dot);
       meta.appendChild(name);
-
-      const status = document.createElement('div');
-      status.textContent = `${player.pieces.filter((p) => p >= 40).length}/4 concluídas`;
-
       row.appendChild(meta);
       row.appendChild(status);
 
-      const validMoves = this.getValidMovesForPlayer(index);
-      if (this.diceValue !== null && validMoves.length > 0 && !this.gameOver && index === this.currentPlayerIndex) {
-        const moveList = document.createElement('div');
-        moveList.style.marginTop = '8px';
-        moveList.style.display = 'flex';
-        moveList.style.flexWrap = 'wrap';
-        moveList.style.gap = '6px';
+      if (index === this.currentPlayerIndex && this.diceValue !== null && !this.gameOver) {
+        const buttons = document.createElement('div');
+        buttons.className = 'move-buttons';
 
+        const validMoves = this.getValidMovesForPlayer(index);
         validMoves.forEach((pieceIndex) => {
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.textContent = `Mover peça ${pieceIndex + 1}`;
-          btn.style.padding = '8px 10px';
-          btn.style.fontSize = '0.8rem';
-          btn.style.flex = '1 1 48%';
           btn.addEventListener('click', () => this.movePiece(pieceIndex));
-          moveList.appendChild(btn);
+          buttons.appendChild(btn);
         });
 
-        row.appendChild(moveList);
+        row.appendChild(buttons);
       }
 
       playersEl.appendChild(row);
@@ -325,9 +300,9 @@ class ParacundeGame {
 
     logEl.innerHTML = '';
     this.log.slice(0, 10).forEach((message) => {
-      const item = document.createElement('li');
-      item.textContent = message;
-      logEl.appendChild(item);
+      const li = document.createElement('li');
+      li.textContent = message;
+      logEl.appendChild(li);
     });
   }
 }
